@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <title>Plan: Customer registration on BigQuery, rules first</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block"
+    rel="stylesheet"
+  />
+
+  <!-- Tailwind, configured with this doc's theme tokens -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // LIGHT-FIRST surfaces. `warm` and `wash` are page grounds; `card`
+            // sits on either. `panel` is the deepest light tone, `ink-block` the
+            // only dark surface (used sparingly — see Where dark is allowed).
+            surface: {
+              bg: "#f7f8fa",
+              card: "#ffffff",
+              "card-alt": "#fdfaf3",
+              wash: "#f1f4f8",
+              warm: "#fdfaf3",
+              panel: "#eef1f4",
+              "ink-block": "#12161a",
+            },
+            // Text ramp — every level has ONE job; see the Legibility floor.
+            ink: {
+              DEFAULT: "#12161a",
+              body: "#263038",
+              label: "#5a6673",
+              muted: "#55616c",
+              faint: "#78848f",
+              "on-dark": "#d8dee4",
+              "label-on-dark": "#a3aeb8",
+            },
+            line: {
+              DEFAULT: "#e4e9ee",
+              strong: "#d3dae2",
+              warm: "#e8d9b4",
+              lilac: "#ddd2f2",
+            },
+            // Gold is the accent. `hi` is the fill; `lilac` the secondary
+            // container; `clay` a genuine negative.
+            gold: { DEFAULT: "#a9782a", hi: "#f3c963", tint: "#a9782a14" },
+            lilac: { DEFAULT: "#6b4fa8", surface: "#f1ecfb" },
+            clay: { DEFAULT: "#a0483a", tint: "#a0483a14" },
+            // Chart fills — see Charts.
+            bar: {
+              DEFAULT: "#e8d5a8",
+              pick: "#a9782a",
+              over: "#2a3037",
+              cap: "#cbd2d9",
+            },
+          },
+          fontFamily: {
+            sans: ["Manrope", "system-ui", "sans-serif"],
+            mono: ["Space Grotesk", "ui-monospace", "monospace"],
+          },
+          borderRadius: {
+            none: "0px",
+            sm: "2px",
+            DEFAULT: "2px",
+            md: "2px",
+            lg: "2px",
+            xl: "2px",
+            "2xl": "2px",
+            "3xl": "2px",
+            // `full` is left circular on purpose — reserved for literal dot/flow
+            // markers (see Diagrams). Never use it on a box, card, chip, or button.
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+
+  <style>
+    /* Base content size — 16px / 26px, the same as `text-base`. Not larger: the
+       page is dense (flat half-height banner, cards, tables, diagrams), and any
+       bump here forces every heading above it to grow too, which is what makes a
+       generated page read bigger than it should. 16px also makes the base and the
+       content floor the SAME number, so `text-base` on an element is a no-op
+       rather than a silent shrink. Explicit Tailwind text-size utilities are
+       unaffected; the small-uppercase LABEL idiom has a 14px floor. NEVER
+       text-xs (12px). */
+    body {
+      font-size: 16px;
+      line-height: 26px;
+    }
+
+    /* LABEL FLOOR — 14px. Tailwind has no 14px step between text-sm (14px) and
+       text-xs (12px), so `text-xs` is redefined here rather than left to
+       tempt: any label written as text-xs still renders at the floor. */
+    .text-xs {
+      font-size: 0.875rem !important;
+      line-height: 1.35 !important;
+    }
+
+    /* COLOR FLOOR — nothing on a light ground sits lighter than ink-faint
+       (#78848f, ≈4.6:1 on the page ground). A pasted light hex in an inline
+       style is pulled back to body ink rather than shipping unreadable. The
+       accents are allowed through explicitly. */
+    [style*="color:#9"],
+    [style*="color:#a"],
+    [style*="color:#A"],
+    [style*="color:#b"],
+    [style*="color:#B"],
+    [style*="color:#c"],
+    [style*="color:#C"],
+    [style*="color:#d"],
+    [style*="color:#D"],
+    [style*="color:#e"],
+    [style*="color:#E"],
+    [style*="color:#f"],
+    [style*="color:#F"] {
+      color: #263038 !important;
+    }
+    .on-dark [style*="color:#"] {
+      color: inherit !important;
+    }
+    [style*="#a9782a"],
+    [style*="#A9782A"] {
+      color: #a9782a !important;
+    }
+    [style*="#a0483a"],
+    [style*="#A0483A"] {
+      color: #a0483a !important;
+    }
+
+    /* ARROW PRIMITIVE — one object for every arrow on the page: a shaft with a
+       chevron head. `.arw` alone is horizontal; add `down`/`up` (which swap the
+       box axis, NOT a rotate — a rotate leaves the box horizontal and the
+       connector overflows its row), `left`, `diag`, `sm`/`lg`, or `dashed`.
+       The shaft runs the FULL length and the head overlaps it: stopping it
+       short leaves a visible gap, because the head is a square rotated 45° and
+       its vertex sits past the box edge. */
+    .arw {
+      --len: 2rem;
+      --w: 1.5px;
+      --head: 8px;
+      display: inline-block;
+      position: relative;
+      flex: none;
+      color: #a9782a;
+      width: var(--len);
+      height: var(--head);
+      font-size: 0;
+      line-height: 0;
+      align-self: center;
+    }
+    .arw::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 1px;
+      top: 50%;
+      height: var(--w);
+      margin-top: calc(var(--w) / -2);
+      background: currentColor;
+    }
+    .arw::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 50%;
+      width: var(--head);
+      height: var(--head);
+      border-right: var(--w) solid currentColor;
+      border-top: var(--w) solid currentColor;
+      transform: translateY(-50%) rotate(45deg);
+    }
+    .arw.down,
+    .arw.up {
+      width: var(--head);
+      height: var(--len);
+    }
+    .arw.down::before,
+    .arw.up::before {
+      left: 50%;
+      right: auto;
+      margin: 0 0 0 calc(var(--w) / -2);
+      width: var(--w);
+      height: auto;
+    }
+    .arw.down::before {
+      top: 0;
+      bottom: 1px;
+    }
+    .arw.up::before {
+      top: 1px;
+      bottom: 0;
+    }
+    .arw.down::after {
+      top: auto;
+      bottom: 0;
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%) rotate(135deg);
+    }
+    .arw.up::after {
+      top: 0;
+      bottom: auto;
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%) rotate(-45deg);
+    }
+    .arw.left {
+      transform: rotate(180deg);
+    }
+    .arw.diag {
+      transform: rotate(38deg);
+    }
+    .arw.sm {
+      --len: 1.25rem;
+    }
+    .arw.lg {
+      --len: 3.25rem;
+    }
+    .arw.dashed::before {
+      background: repeating-linear-gradient(
+        to right,
+        currentColor 0 4px,
+        transparent 4px 8px
+      );
+    }
+    .arw.dashed.down::before,
+    .arw.dashed.up::before {
+      background: repeating-linear-gradient(
+        to bottom,
+        currentColor 0 4px,
+        transparent 4px 8px
+      );
+    }
+
+    /* DIAGRAM FRAME — every diagram sits in this dotted box with a floating
+       heading, so a reader can tell a figure from body content at a glance. */
+    .dgm-frame {
+      position: relative;
+      border: 1.5px dashed #d3dae2;
+      border-radius: 12px;
+      padding: 1.9rem 1.4rem 1.4rem;
+      margin-top: 2.2rem;
+    }
+    .dgm-frame > .dgm-heading {
+      position: absolute;
+      top: -0.84rem;
+      left: 1.2rem;
+      padding: 0.4rem 0.8rem;
+      background-color: #fbeaea;
+      border-radius: 4px;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: 0.13em;
+      line-height: 1;
+      text-transform: uppercase;
+      color: #5a6673;
+    }
+
+    /* REGION FAMILIES — one two-tone family per region of a system (a plane,
+       a boundary, a tenancy), the same family wherever that region appears on
+       the page. `--pl-dark` is the header strip, `--pl-light` the band body,
+       `--pl-line` its edge, `--pl-chipline` a chip's edge, `--pl-wash` a lighter
+       body for a second band of the same family. */
+    .pl-slate {
+      --pl-dark: #1f2833;
+      --pl-light: #e9eff5;
+      --pl-line: #b9c5d2;
+      --pl-chipline: #d7dee6;
+      --pl-wash: #f4f7fa;
+    }
+    .pl-gold {
+      --pl-dark: #1b263b;
+      --pl-light: #fbf1dc;
+      --pl-line: #d0ab63;
+      --pl-chipline: #e6d3ab;
+      --pl-wash: #fdf8ee;
+    }
+    .pl-blue {
+      --pl-dark: #001f24;
+      --pl-light: #e9f1fa;
+      --pl-line: #9dbedf;
+      --pl-chipline: #cfe0f1;
+      --pl-wash: #f3f7fc;
+    }
+    .pl-green {
+      --pl-dark: #1a1c2e;
+      --pl-light: #e6f3ee;
+      --pl-line: #8fc2b0;
+      --pl-chipline: #c3e0d5;
+      --pl-wash: #f2f9f6;
+    }
+    .pl-lilac {
+      --pl-dark: #282c35;
+      --pl-light: #ece4fa;
+      --pl-line: #b6a2e4;
+      --pl-chipline: #d9cdf3;
+      --pl-wash: #f4effc;
+    }
+    .pl-return {
+      --pl-dark: #242124;
+      --pl-light: #fdf2dd;
+      --pl-line: #242124;
+      --pl-chipline: #f0d5a3;
+      --pl-wash: #fefaf2;
+    }
+
+    /* BAND — a region drawn as a dark header strip over its light body. The
+       strip names the region and says in one clause what runs there; the body
+       holds the region's boxes in a row. */
+    .dgm-band {
+      background: var(--pl-light);
+      border: 1px solid var(--pl-line);
+      border-radius: 10px;
+      padding: 0 0 14px;
+    }
+    .dgm-band.tone-2 {
+      background: var(--pl-wash);
+    }
+    .dgm-band > .dgm-band-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 14px;
+      padding: 11px 14px;
+      border-radius: 9px 9px 0 0;
+      background: var(--pl-dark);
+      color: #ffffff;
+      text-decoration: none;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .dgm-band > .dgm-band-head .sub {
+      color: #a3aeb8;
+      font-weight: 400;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .dgm-band > .dgm-band-head .repo {
+      background: #ffffff;
+      color: var(--pl-dark);
+      padding: 2px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.08em;
+    }
+    .dgm-band > .dgm-band-head .material-symbols-outlined {
+      font-size: 16px;
+      margin-left: auto;
+    }
+    .dgm-band > .dgm-row {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      margin: 0 14px;
+    }
+
+    /* BOX — three tiers: a mono name (a link, when a section explains it), one
+       sentence, then chips for the concrete items. A box with only a name is a
+       label, not a figure. */
+    .rgn {
+      display: block;
+      flex: 1 1 0;
+      min-width: 0;
+      background: #ffffff;
+      border: 1px solid var(--pl-line, #d3dae2);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #263038;
+      text-decoration: none;
+    }
+    a.rgn:hover,
+    a.rgn:focus-visible {
+      border-color: var(--pl-dark, #a9782a);
+      box-shadow: 0 0 0 2px var(--pl-light, #a9782a14);
+      outline: none;
+    }
+    a.rgn:hover > .rgn-name,
+    a.rgn:focus-visible > .rgn-name {
+      text-decoration: underline;
+    }
+    .rgn-name {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      margin: 0 0 8px;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--pl-dark, #5a6673);
+    }
+    .rgn-name .material-symbols-outlined {
+      font-size: 16px;
+    }
+    .rgn-sub {
+      margin: 0 0 10px;
+      font-size: 16px;
+      line-height: 23px;
+      color: #263038;
+    }
+    .m-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .m-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--pl-chipline, #d3dae2);
+      background: #ffffff;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 16px;
+      line-height: 22px;
+      color: #263038;
+      overflow-wrap: anywhere;
+    }
+    .m-chip.on {
+      background: var(--pl-dark, #12161a);
+      border-color: var(--pl-dark, #12161a);
+      color: #ffffff;
+    }
+    .m-chips.flow > .m-chip {
+      flex: 1 1 130px;
+    }
+
+    /* BADGE — a numbered marker for a boundary the legend explains. The one
+       legitimate use of a circle on the page besides a flow dot. */
+    .badge-n {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 9999px;
+      background: #12161a;
+      color: #ffffff;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 0.875rem;
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    /* EDGE — a labeled connector between two bands: the arrow plus a mono
+       clause naming what crosses it. */
+    .dgm-edge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 10px 14px;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 0.875rem;
+      color: #5a6673;
+    }
+    .dgm-edge .arw {
+      color: #5a6673;
+    }
+
+    /* RETURN LEG — a dashed column beside the bands for whatever travels back
+       up (a receipt, telemetry, a verdict), with an `up dashed` arrow inside. */
+    .dgm-return {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 14px;
+      border: 1.5px dashed var(--pl-dark);
+      border-radius: 10px;
+      background: var(--pl-light);
+      text-align: center;
+      font-family: "Space Grotesk", ui-monospace, monospace;
+      font-size: 16px;
+      line-height: 23px;
+      color: #263038;
+    }
+    .dgm-return > .rgn-name {
+      display: inline-flex;
+      margin: 0;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--pl-dark);
+      color: #ffffff;
+    }
+
+    /* LEGEND — each region family as a two-tone swatch, dark over light. */
+    .pl-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 22px;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid #e4e9ee;
+    }
+    .pl-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      color: #263038;
+    }
+    .pl-key i {
+      flex: none;
+      width: 17px;
+      height: 24px;
+      border-radius: 4px;
+      border: 1px solid var(--pl-line);
+      background: linear-gradient(
+        to bottom,
+        var(--pl-dark) 0 45%,
+        var(--pl-light) 45% 100%
+      );
+    }
+    .pl-key.pl-return i {
+      border-style: dashed;
+      border-color: var(--pl-dark);
+    }
+    .dgm-cap {
+      margin-top: 16px;
+      font-weight: 600;
+      color: #12161a;
+    }
+
+    /* A band's row stacks on a narrow screen, and a horizontal connector
+       between its boxes turns vertical with it. */
+    @media (max-width: 760px) {
+      .dgm-band > .dgm-row {
+        flex-direction: column;
+      }
+      .arw.resp {
+        width: var(--head);
+        height: var(--len);
+      }
+      .arw.resp::before {
+        left: 50%;
+        right: auto;
+        top: 0;
+        bottom: 1px;
+        width: var(--w);
+        height: auto;
+        margin: 0 0 0 calc(var(--w) / -2);
+      }
+      .arw.resp::after {
+        top: auto;
+        bottom: 0;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%) rotate(135deg);
+      }
+    }
+
+    /* Diagram flow animation — connector draw + flow-dot, gated by
+       prefers-reduced-motion. Boxes are static; this shows direction/order,
+       not a box reveal. */
+    @keyframes draw-line {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+    @keyframes flow-dot {
+      from {
+        offset-distance: 0%;
+      }
+      to {
+        offset-distance: 100%;
+      }
+    }
+    .diagram-edge {
+      stroke-dasharray: 400;
+      stroke-dashoffset: 400;
+    }
+    .in-view .diagram-edge {
+      animation: draw-line 0.6s ease-out forwards;
+      animation-delay: 0.3s;
+    }
+    .diagram-flow-dot {
+      offset-path: var(--edge-path);
+      animation: flow-dot 1.2s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .diagram-edge {
+        stroke-dashoffset: 0 !important;
+        animation: none !important;
+      }
+      .diagram-flow-dot {
+        animation: none !important;
+      }
+    }
+
+    [data-banner][data-tint="0"] {
+      background: #fdfaf3;
+      border-bottom-color: #e8d9b4;
+    } /* warm cream */
+    [data-banner][data-tint="1"] {
+      background: #f4f7fa;
+      border-bottom-color: #d8e2ec;
+    } /* cool bluegray */
+    [data-banner][data-tint="2"] {
+      background: #f6f5f1;
+      border-bottom-color: #e1ded4;
+    } /* warm stone */
+    [data-banner][data-tint="3"] {
+      background: #f3f7f5;
+      border-bottom-color: #d5e4dc;
+    } /* pale sage */
+    [data-banner][data-tint="4"] {
+      background: #f8f5f8;
+      border-bottom-color: #e5dae5;
+    } /* faint mauve */
+    [data-banner][data-tint="5"] {
+      background: #faf7f3;
+      border-bottom-color: #eadfd2;
+    } /* sand */
+  </style>
+</head>
+<body class="bg-surface-bg text-ink-body font-sans">
+  <header data-banner data-tint="3" class="w-full border-b bg-surface-warm border-line-warm">
+    <div class="w-full max-w-[1200px] mx-auto px-6 py-12">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Plan · <span class="text-gold">customer-registration-api / 2026-11-16</span>
+      </p>
+      <h1 class="font-sans text-4xl md:text-5xl font-semibold text-ink mt-3 leading-tight">
+        Customer registration on BigQuery, <em class="not-italic text-gold">rules first</em>
+      </h1>
+      <p class="text-xl text-ink-muted mt-4">
+        A FastAPI service and a Next.js form register customers in BigQuery. Deterministic checks decide 201, 409, or 422, and Gemini only adds typo and likely-duplicate warnings that an ADK assistant explains.
+      </p>
+      <dl class="flex flex-wrap gap-x-10 gap-y-4 mt-8">
+        <div>
+          <dt class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Effort</dt>
+          <dd class="font-mono text-ink-body mt-1">Deep</dd>
+        </div>
+        <div>
+          <dt class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Gate</dt>
+          <dd class="font-mono text-ink-body mt-1">Platform check in the dev project</dd>
+        </div>
+        <div>
+          <dt class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Open questions</dt>
+          <dd class="font-mono text-ink-body mt-1">8</dd>
+        </div>
+        <div>
+          <dt class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Next</dt>
+          <dd class="font-mono text-ink-body mt-1">/axis-code customer-registration-api</dd>
+        </div>
+      </dl>
+    </div>
+  </header>
+
+  <!-- Decision -->
+  <section class="w-full bg-surface-card">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Decision · <span class="text-gold">approach A, rules decide</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Status codes from rules, warnings from Gemini</h2>
+      <p class="text-lg text-ink-muted mt-3">
+        Three approaches came out of shaping, and the chosen one keeps every outcome deterministic. When Gemini fails or times out, the registration goes ahead with <strong class="font-medium text-ink">no warning attached</strong>.
+      </p>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 mt-10">
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Operations</p>
+          <p class="font-mono text-3xl font-semibold text-ink mt-2 flex items-center gap-2">
+            <span class="material-symbols-outlined text-3xl text-gold">api</span>4
+          </p>
+          <p class="text-base text-ink-muted">in one OpenAPI 3.1 contract</p>
+          <hr class="border-line my-3" />
+          <p class="text-base text-ink">register, validate, check-duplicate, and agent chat</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— BigQuery tables</p>
+          <p class="font-mono text-3xl font-semibold text-ink mt-2 flex items-center gap-2">
+            <span class="material-symbols-outlined text-3xl text-gold">table_view</span>2
+          </p>
+          <p class="text-base text-ink-muted">in dataset <code class="font-mono">customer_ops</code></p>
+          <hr class="border-line my-3" />
+          <p class="text-base text-ink"><code class="font-mono">customers</code> and <code class="font-mono">registration_audit_logs</code>, partitioned by day</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Advice budget</p>
+          <p class="font-mono text-3xl font-semibold text-ink mt-2 flex items-center gap-2">
+            <span class="material-symbols-outlined text-3xl text-gold">timer</span>4<span class="text-base font-normal text-ink-muted"> s</span>
+          </p>
+          <p class="text-base text-ink-muted">for typo and duplicate advice together</p>
+          <hr class="border-line my-3" />
+          <p class="text-base text-ink">Past the budget, the request continues with <strong class="font-medium">no advice</strong></p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Model-set statuses</p>
+          <p class="font-mono text-3xl font-semibold text-ink mt-2 flex items-center gap-2">
+            <span class="material-symbols-outlined text-3xl text-gold">rule</span>0
+          </p>
+          <p class="text-base text-ink-muted">of 201, 409, and 422</p>
+          <hr class="border-line my-3" />
+          <p class="text-base text-ink">Email rules and the BigQuery transaction set <strong class="font-medium">every status</strong></p>
+        </div>
+      </div>
+
+      <div class="mt-10 bg-surface-ink-block on-dark p-8">
+        <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label-on-dark">
+          Key tradeoff · <span class="text-gold-hi">accepted by the user</span>
+        </p>
+        <p class="text-lg text-ink-on-dark mt-3">
+          Truthful status codes let the form show the exact problem at once. They also let anyone ask the API whether an email is registered. Rate limits and a bot check slow probing down and do not stop it, and <strong class="font-medium text-gold-hi">phone numbers and tax IDs carry the same exposure</strong>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Master figure -->
+  <section class="w-full bg-surface-warm">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Architecture · <span class="text-gold">one service, one dataset</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">The system in one picture</h2>
+      <p class="text-lg text-ink-muted mt-3">
+        The browser calls the API directly. The API makes every decision and reaches BigQuery, Vertex AI, and DNS under one service account.
+      </p>
+
+      <div class="dgm-frame bg-surface-card">
+        <span class="dgm-heading">Registration system, top to bottom</span>
+        <div class="flex flex-col lg:flex-row gap-3">
+          <div class="flex flex-1 flex-col min-w-0">
+            <div class="dgm-band pl-slate">
+              <div class="dgm-band-head">
+                <span>Browser</span>
+                <span class="sub">Next.js 15 page, one build for every environment</span>
+              </div>
+              <div class="dgm-row">
+                <a class="rgn" href="#frontend">
+                  <p class="rgn-name">Registration form <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">Labels above fields, errors under them, pairs in two columns from md up.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">validate on email blur</span>
+                    <span class="m-chip">register on submit</span>
+                  </div>
+                </a>
+                <a class="rgn" href="#assistant">
+                  <p class="rgn-name">Assistant panel <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">Beside the form from lg up, in a bottom drawer below it.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">form snapshot each turn</span>
+                    <span class="m-chip">Confirm sends the action</span>
+                  </div>
+                </a>
+              </div>
+            </div>
+
+            <div class="dgm-edge">
+              <span class="arw down"></span><span class="badge-n">1</span>
+              <span>HTTPS JSON, CORS allow-list, per-client limits, bot check</span>
+            </div>
+
+            <div class="dgm-band pl-gold">
+              <div class="dgm-band-head">
+                <span>registration-api</span>
+                <span class="sub">FastAPI: routes, services, repository</span>
+              </div>
+              <div class="dgm-row">
+                <a class="rgn" href="#contract">
+                  <p class="rgn-name">Routes <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">Four operations with problem+json errors.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">register</span>
+                    <span class="m-chip">validate</span>
+                    <span class="m-chip">check-duplicate</span>
+                    <span class="m-chip">agent/chat</span>
+                  </div>
+                </a>
+                <a class="rgn" href="#flow">
+                  <p class="rgn-name">Deterministic services <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">Email rules, exact matching, and the transaction decide every status.</p>
+                  <div class="m-chips">
+                    <span class="m-chip on">201 / 409 / 422</span>
+                    <span class="m-chip">email validation</span>
+                    <span class="m-chip">duplicate detection</span>
+                  </div>
+                </a>
+                <div class="rgn">
+                  <p class="rgn-name">Advisor</p>
+                  <p class="rgn-sub">Single structured Gemini calls inside the 4-second budget.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">typo: domain only</span>
+                    <span class="m-chip">duplicates: five candidates, opaque refs</span>
+                  </div>
+                </div>
+                <a class="rgn" href="#assistant">
+                  <p class="rgn-name">ADK assistant <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">One LlmAgent with three tools and a confirmation gate.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">validate_email_tool</span>
+                    <span class="m-chip">detect_duplicate_customer_tool</span>
+                    <span class="m-chip">register_customer_bq_tool</span>
+                  </div>
+                </a>
+              </div>
+            </div>
+
+            <div class="dgm-edge">
+              <span class="arw down"></span><span class="badge-n">2</span>
+              <span>parameterized query jobs and model calls under the registration-api service account</span>
+            </div>
+
+            <div class="dgm-band pl-blue">
+              <div class="dgm-band-head">
+                <span>Backing services</span>
+                <span class="sub">the Google Cloud project, public DNS, and one optional outside model</span>
+              </div>
+              <div class="dgm-row">
+                <a class="rgn" href="#flow">
+                  <p class="rgn-name">BigQuery customer_ops <span class="material-symbols-outlined">north_east</span></p>
+                  <p class="rgn-sub">Customers and the audit trail; the transaction enforces uniqueness.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">customers</span>
+                    <span class="m-chip">registration_audit_logs</span>
+                    <span class="m-chip on">lock, then MERGE</span>
+                  </div>
+                </a>
+                <div class="rgn">
+                  <p class="rgn-name">Gemini on Vertex AI</p>
+                  <p class="rgn-sub">Advice and assistant turns; the model id is configuration.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">gemini-2.5-flash, as briefed</span>
+                    <span class="m-chip">successor id pending</span>
+                  </div>
+                </div>
+                <div class="rgn">
+                  <p class="rgn-name">Public DNS</p>
+                  <p class="rgn-sub">MX lookups with a 2-second budget.</p>
+                  <div class="m-chips">
+                    <span class="m-chip">MX, then A or AAAA</span>
+                  </div>
+                </div>
+                <div class="rgn pl-lilac">
+                  <p class="rgn-name">OpenAI via LiteLLM</p>
+                  <p class="rgn-sub">Optional GPT-4o fallback for chat turns only.</p>
+                  <div class="m-chips">
+                    <span class="m-chip"><span class="badge-n">3</span> off by default</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dgm-return pl-return lg:flex-[0_0_200px]">
+            <p class="rgn-name">Answers</p>
+            <span class="arw up dashed lg"></span>
+            <span>201 with warnings, 409 with <code>matched_on</code>, 422 under the field</span>
+          </div>
+        </div>
+
+        <div class="pl-legend">
+          <span class="pl-key pl-slate"><i></i>Browser</span>
+          <span class="pl-key pl-gold"><i></i>registration-api</span>
+          <span class="pl-key pl-blue"><i></i>Backing services</span>
+          <span class="pl-key pl-lilac"><i></i>Optional outside model</span>
+          <span class="pl-key pl-return"><i></i>Answers</span>
+        </div>
+        <div class="flex flex-wrap gap-x-8 gap-y-2 mt-4 text-base text-ink-body">
+          <span class="inline-flex items-center gap-2"><span class="badge-n">1</span>public internet to the API</span>
+          <span class="inline-flex items-center gap-2"><span class="badge-n">2</span>the API's service account</span>
+          <span class="inline-flex items-center gap-2"><span class="badge-n">3</span>data leaving Google Cloud</span>
+        </div>
+        <p class="dgm-cap">
+          Read it top down. Every status comes from the deterministic services; the advisor and the assistant add warnings and explanations. Follow a linked box to the section that explains it.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Approach -->
+  <section class="w-full bg-surface-wash">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Approach · <span class="text-gold">three options from shaping</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Who decides the outcome</h2>
+      <p class="text-lg text-ink-muted mt-3">
+        Approach A won because the same input always gets the same status and every outcome can be tested offline.
+      </p>
+
+      <div class="overflow-x-auto mt-8 bg-surface-card border border-line">
+        <table class="w-full text-base border-collapse">
+          <thead>
+            <tr>
+              <th class="text-left p-3"></th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold bg-gold-tint">A: rules decide, model advises</th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-muted">B: the agent decides</th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-muted">C: chat first</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-t border-line">
+              <td class="p-3 font-semibold text-ink">Who sets 201, 409, 422</td>
+              <td class="p-3 text-gold bg-gold-tint font-semibold">Code and the BigQuery transaction</td>
+              <td class="p-3 text-ink">The model, through tool calls</td>
+              <td class="p-3 text-ink">The model, through conversation</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-semibold text-ink">Model failure</td>
+              <td class="p-3 text-gold bg-gold-tint">Registration proceeds, no advice</td>
+              <td class="p-3 text-clay">Registration fails or stalls</td>
+              <td class="p-3 text-clay">Onboarding stops</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-semibold text-ink">Same input twice</td>
+              <td class="p-3 text-gold bg-gold-tint">Same status</td>
+              <td class="p-3 text-clay">Can differ</td>
+              <td class="p-3 text-clay">Can differ</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-semibold text-ink">Offline testing</td>
+              <td class="p-3 text-gold bg-gold-tint">Unit and API tests with fakes</td>
+              <td class="p-3 text-ink">Model mocks for every outcome</td>
+              <td class="p-3 text-ink">Scripted conversations</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-semibold text-ink">Contract</td>
+              <td class="p-3 text-gold bg-gold-tint">Fixed operations, fixed outcomes</td>
+              <td class="p-3 text-ink">Fixed operations, model-chosen outcomes</td>
+              <td class="p-3 text-clay">No predictable contract</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="font-sans text-lg font-semibold text-ink mt-12">Designs set aside inside approach A</h3>
+      <div class="grid md:grid-cols-2 gap-6 mt-4">
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-clay">— Set aside</p>
+          <p class="text-base text-ink mt-2"><strong class="font-semibold">A bare MERGE for uniqueness.</strong> Insert-only MERGEs do not conflict, so two concurrent registrations of one email can both insert.</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-clay">— Set aside</p>
+          <p class="text-base text-ink mt-2"><strong class="font-semibold">ADK BigQueryToolset.</strong> Its <code class="font-mono">execute_sql</code> runs SQL the model writes; custom tools call the same services as the REST routes.</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-clay">— Set aside</p>
+          <p class="text-base text-ink mt-2"><strong class="font-semibold">Every model call through ADK.</strong> Typo and duplicate advice are one prompt each, so the advisor calls <code class="font-mono">google-genai</code> directly.</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-clay">— Set aside</p>
+          <p class="text-base text-ink mt-2"><strong class="font-semibold">A Next.js proxy route.</strong> It would hide the client IP that rate limiting needs; direct calls use a CORS allow-list.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Register flow -->
+  <section id="flow" class="w-full bg-surface-bg">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Register flow · <span class="text-gold">five stages, one transaction</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">One registration, start to finish</h2>
+      <p class="text-base text-ink-muted mt-3 flex items-center gap-2">
+        <span class="material-symbols-outlined text-gold">map</span>
+        In the master diagram: the deterministic services and the BigQuery box.
+      </p>
+
+      <div class="dgm-frame bg-surface-card">
+        <span class="dgm-heading">POST /api/v1/customers/register</span>
+        <div class="flex flex-col md:flex-row items-stretch gap-3">
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Shape</p>
+            <p class="text-base text-ink mt-2">Pydantic model, unknown fields rejected</p>
+            <p class="font-mono text-sm text-ink-label mt-3">ends with 422</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Abuse checks</p>
+            <p class="text-base text-ink mt-2">Per-client limit, then the bot check</p>
+            <p class="font-mono text-sm text-ink-label mt-3">ends with 429 or 403</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Email rules</p>
+            <p class="text-base text-ink mt-2">Syntax, disposable list, MX within 2 s</p>
+            <p class="font-mono text-sm text-ink-label mt-3">ends with 422</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line-lilac bg-lilac-surface p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Advice</p>
+            <p class="text-base text-ink mt-2">Typo and likely-duplicate checks within 4 s</p>
+            <p class="font-mono text-sm text-ink-label mt-3">adds warnings, never ends</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border-2 border-gold bg-surface-warm p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Transaction</p>
+            <p class="text-base text-ink mt-2">Lock, replay check, MERGE, audit row</p>
+            <p class="font-mono text-sm text-ink-label mt-3">201, 409, or 503 after retries</p>
+          </div>
+        </div>
+        <p class="dgm-cap">Four stages can end the request with an error. The advice stage only adds warnings, so a Gemini outage changes no status.</p>
+      </div>
+
+      <h3 class="font-sans text-lg font-semibold text-ink mt-12">BigQuery behavior and the plan's response</h3>
+      <div class="overflow-x-auto mt-4 bg-surface-card border border-line">
+        <table class="w-full text-base border-collapse">
+          <thead>
+            <tr>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Documented behavior</th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold bg-gold-tint">What the plan does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-t border-line">
+              <td class="p-3 text-ink">An insert-only MERGE does not conflict with concurrent DML</td>
+              <td class="p-3 text-ink bg-gold-tint">Opens every registration with <code class="font-mono">DELETE … WHERE FALSE</code> to take the table lock</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 text-ink">A losing transaction aborts at once and is not queued; Google advises a 60-second wait</td>
+              <td class="p-3 text-ink bg-gold-tint">Retries with jitter for up to 10 s, then 503 with <code class="font-mono">Retry-After: 60</code></td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 text-ink">Primary keys are <code class="font-mono">NOT ENFORCED</code></td>
+              <td class="p-3 text-ink bg-gold-tint">The MERGE <code class="font-mono">ON</code> clause is the uniqueness rule; a check query detects breaches</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 text-ink">Streamed rows cannot be changed by DML for 30 minutes</td>
+              <td class="p-3 text-ink bg-gold-tint">Writes customers through DML query jobs only</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 text-ink">Parameters cannot be NULL or name a table</td>
+              <td class="p-3 text-ink bg-gold-tint">Sends empty strings with <code class="font-mono">NULLIF</code>; validates the dataset name from configuration</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Contract -->
+  <section id="contract" class="w-full bg-surface-card">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Contract · <span class="text-gold">OpenAPI 3.1, committed and diffed in CI</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Four operations</h2>
+      <p class="text-lg text-ink-muted mt-3">
+        The brief's two endpoint lists merge into one contract. <code class="font-mono">agent/onboard</code> is dropped, because the assistant explains and the register route onboards.
+      </p>
+
+      <div class="overflow-x-auto mt-8 border border-line">
+        <table class="w-full text-base border-collapse">
+          <thead>
+            <tr class="bg-surface-wash">
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Operation</th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Statuses</th>
+              <th class="p-3 text-left font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">Returns</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-t border-line">
+              <td class="p-3 font-mono text-ink">POST /api/v1/customers/register</td>
+              <td class="p-3">
+                <span class="inline-block border border-gold text-gold text-sm uppercase tracking-wide px-2 py-0.5">201</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">409</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">422</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">403 429 503</span>
+              </td>
+              <td class="p-3 text-ink">Customer id and warnings; 409 names the matched fields only</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-mono text-ink">POST /api/v1/customers/validate</td>
+              <td class="p-3">
+                <span class="inline-block border border-gold text-gold text-sm uppercase tracking-wide px-2 py-0.5">200</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">422 429</span>
+              </td>
+              <td class="p-3 text-ink">The verdict per check and any typo suggestion; 422 only for a malformed body</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-mono text-ink">POST /api/v1/customers/check-duplicate</td>
+              <td class="p-3">
+                <span class="inline-block border border-gold text-gold text-sm uppercase tracking-wide px-2 py-0.5">200</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">403 422 429</span>
+              </td>
+              <td class="p-3 text-ink">Exact matches and the likely-duplicate warning; writes no customer</td>
+            </tr>
+            <tr class="border-t border-line">
+              <td class="p-3 font-mono text-ink">POST /api/v1/agent/chat</td>
+              <td class="p-3">
+                <span class="inline-block border border-gold text-gold text-sm uppercase tracking-wide px-2 py-0.5">200</span>
+                <span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5">422 429 503</span>
+              </td>
+              <td class="p-3 text-ink">The reply, suggested actions, and registration status taken from the tool result</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="mt-6 space-y-2 text-base text-ink">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>Every error is <strong class="font-medium">RFC 9457 problem+json</strong> with a stable <code class="font-mono">type</code> URN.</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>The 201 carries the id in its body and <strong class="font-medium">no Location header</strong>, because a public customer read endpoint would expose personal data.</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>A repeated <code class="font-mono">Idempotency-Key</code> replays the original 201; a new body under the same key gets 422.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Assistant -->
+  <section id="assistant" class="w-full bg-surface-warm">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Assistant · <span class="text-gold">one ADK LlmAgent, three tools</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Assistant tools and the confirmation gate</h2>
+      <p class="text-base text-ink-muted mt-3 flex items-center gap-2">
+        <span class="material-symbols-outlined text-gold">map</span>
+        In the master diagram: the ADK assistant box.
+      </p>
+
+      <div class="grid md:grid-cols-3 gap-6 mt-8">
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Read only</p>
+          <h3 class="font-mono text-lg font-semibold text-ink mt-1 break-words">validate_email_tool</h3>
+          <p class="text-base text-ink mt-3"><strong class="font-medium">Model supplies:</strong> <code class="font-mono">email</code></p>
+          <p class="text-base text-ink-muted mt-2">Runs the same checks as the validate route.</p>
+        </div>
+        <div class="bg-surface-card border border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Read only</p>
+          <h3 class="font-mono text-lg font-semibold text-ink mt-1 break-words">detect_duplicate_customer_tool</h3>
+          <p class="text-base text-ink mt-3"><strong class="font-medium">Model supplies:</strong> <code class="font-mono">include_likely_duplicates</code></p>
+          <p class="text-base text-ink-muted mt-2">Reads the form snapshot from session state and returns matched field names only.</p>
+        </div>
+        <div class="bg-surface-card border-t-4 border-gold border-x border-b border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Writes, gated</p>
+          <h3 class="font-mono text-lg font-semibold text-ink mt-1 break-words">register_customer_bq_tool</h3>
+          <p class="text-base text-ink mt-3"><strong class="font-medium">Model supplies:</strong> nothing</p>
+          <p class="text-base text-ink-muted mt-2">Registers the confirmed snapshot through the same service as the REST route.</p>
+        </div>
+      </div>
+
+      <div class="dgm-frame bg-surface-card">
+        <span class="dgm-heading">Registering from chat</span>
+        <div class="flex flex-col md:flex-row items-stretch gap-3">
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Person</p>
+            <p class="text-base text-ink mt-2">Clicks Confirm in a dialog that names the consequence</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">API</p>
+            <p class="text-base text-ink mt-2">Stores the confirmed snapshot fingerprint for this turn only</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Register tool</p>
+            <p class="text-base text-ink mt-2">Checks the fingerprint, then calls RegistrationService</p>
+          </div>
+          <span class="arw resp self-center"></span>
+          <div class="flex-1 min-w-0 rounded-[10px] border-2 border-gold bg-surface-warm p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Reply</p>
+            <p class="text-base text-ink mt-2">Status copied from the tool result, never from the model's text</p>
+          </div>
+        </div>
+        <p class="dgm-cap">A hallucinated or injected tool call cannot register anyone, because the data and the consent both come from the person.</p>
+      </div>
+
+      <ul class="mt-8 space-y-2 text-base text-ink">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>Tool calls are capped at <strong class="font-medium">four per turn</strong> and turns at 30 per session.</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>The tax ID and phone reach the prompt as <strong class="font-medium">type and last four characters</strong> only.</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-gold text-base mt-1">check_circle</span><span>The GPT-4o fallback is <strong class="font-medium">off by default</strong> and never runs duplicate matching.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Frontend -->
+  <section id="frontend" class="w-full bg-surface-wash">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Frontend · <span class="text-gold">Next.js 15, shadcn/ui, Tailwind CSS v4</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Form and assistant layout</h2>
+      <p class="text-base text-ink-muted mt-3 flex items-center gap-2">
+        <span class="material-symbols-outlined text-gold">map</span>
+        In the master diagram: the Browser band.
+      </p>
+
+      <div class="dgm-frame bg-surface-card">
+        <span class="dgm-heading">The same page at two widths</span>
+        <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-6">
+          <div class="rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Desktop, 1024px and wider</p>
+            <div class="mt-3 rounded-[8px] border border-line-strong bg-surface-card p-3 font-mono text-base text-ink">Header: title and theme toggle</div>
+            <div class="mt-3 grid grid-cols-[minmax(0,1fr)_9rem] gap-3">
+              <div class="rounded-[8px] border border-line-strong bg-surface-card p-3 space-y-2">
+                <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Form card</p>
+                <div class="grid grid-cols-2 gap-2"><span class="m-chip">Given name</span><span class="m-chip">Family name</span></div>
+                <div class="grid grid-cols-1"><span class="m-chip">Email, full width</span></div>
+                <div class="grid grid-cols-2 gap-2"><span class="m-chip">Phone</span><span class="m-chip">Tax ID</span></div>
+                <div class="grid grid-cols-2 gap-2"><span class="m-chip">City</span><span class="m-chip">Region</span></div>
+                <div class="flex justify-end"><span class="m-chip on">Register</span></div>
+              </div>
+              <div class="rounded-[8px] border border-gold bg-surface-warm p-3">
+                <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Assistant</p>
+                <p class="text-base text-ink mt-2">24rem, sticky beside the form</p>
+              </div>
+            </div>
+          </div>
+          <div class="rounded-[10px] border border-line bg-surface-panel p-4">
+            <p class="font-mono text-sm uppercase tracking-[0.16em] text-ink-label">Phone, below 768px</p>
+            <div class="mt-3 rounded-[8px] border border-line-strong bg-surface-card p-3 space-y-2">
+              <span class="m-chip w-full">Given name</span>
+              <span class="m-chip w-full">Family name</span>
+              <span class="m-chip w-full">Email</span>
+              <span class="m-chip w-full">Phone</span>
+              <span class="m-chip on w-full justify-center">Register, full width</span>
+            </div>
+            <div class="mt-3 rounded-[8px] border border-gold bg-surface-warm p-3">
+              <p class="text-base text-ink">"Ask the assistant" opens the same panel in a bottom drawer</p>
+            </div>
+          </div>
+        </div>
+        <p class="dgm-cap">Pairs sit in two columns from 768px up, and the assistant moves beside the form from 1024px up.</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6 mt-10">
+        <div class="bg-surface-card border-t-4 border-gold border-x border-b border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Alignment</p>
+          <ul class="text-base text-ink mt-3 space-y-1 list-disc list-inside">
+            <li>Labels above fields, errors directly under them</li>
+            <li>One spacing scale: <code class="font-mono">gap-2</code> in a field, <code class="font-mono">gap-6</code> between fields, <code class="font-mono">gap-8</code> between groups</li>
+            <li>Submit right-aligned from 640px up, full width below</li>
+          </ul>
+        </div>
+        <div class="bg-surface-card border-t-4 border-lilac border-x border-b border-line p-6">
+          <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-lilac">— Theme</p>
+          <ul class="text-base text-ink mt-3 space-y-1 list-disc list-inside">
+            <li>Neutral palette with one blue accent on <code class="font-mono">--primary</code> and <code class="font-mono">--ring</code></li>
+            <li>Light and dark through the <code class="font-mono">.dark</code> token overrides and <code class="font-mono">next-themes</code></li>
+            <li>Focus always visible; contrast checked per token pair in both themes</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Steps -->
+  <section class="w-full bg-surface-bg">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Steps · <span class="text-gold">twenty steps in ten groups</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Build order</h2>
+      <p class="text-lg text-ink-muted mt-3">
+        The contract comes first, then the code bound by it. The platform check proves the transaction against real BigQuery and gates the model work.
+      </p>
+      <div class="grid md:grid-cols-2 gap-x-10 gap-y-6 mt-8">
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">01</span>
+          <div><p class="text-ink"><strong class="font-semibold">Scaffold and contract.</strong></p><p class="text-base text-ink-muted mt-1">uv project, settings, wire models, OpenAPI 3.1 YAML, Spectral.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">02</span>
+          <div><p class="text-ink"><strong class="font-semibold">Domain rules.</strong></p><p class="text-base text-ink-muted mt-1">Normalization, the disposable list, typo rules, the comparison vector.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">03</span>
+          <div><p class="text-ink"><strong class="font-semibold">BigQuery schema and templates.</strong></p><p class="text-base text-ink-muted mt-1">The DDL, the transaction with its MERGE, and an idempotent apply script.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">04</span>
+          <div><p class="text-ink"><strong class="font-semibold">Repository.</strong></p><p class="text-base text-ink-muted mt-1">Parameterized jobs in worker threads, lock-conflict detection, an in-memory store.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-gold pt-4">
+          <span class="font-mono text-3xl font-semibold text-gold tabular-nums">05</span>
+          <div><p class="text-ink"><strong class="font-semibold">Platform check, a gate.</strong></p><p class="text-base text-ink-muted mt-1">Lock behavior, the DDL, retry timing, and the Gemini model ids, in the dev project.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">06</span>
+          <div><p class="text-ink"><strong class="font-semibold">Services and routes.</strong></p><p class="text-base text-ink-muted mt-1">Email validation, the advisor, duplicate detection, registration.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">07</span>
+          <div><p class="text-ink"><strong class="font-semibold">ADK assistant.</strong></p><p class="text-base text-ink-muted mt-1">The LlmAgent, three tools, the confirmation gate, the optional fallback.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">08</span>
+          <div><p class="text-ink"><strong class="font-semibold">API test suite.</strong></p><p class="text-base text-ink-muted mt-1">22 offline cases in <code class="font-mono">tests/test_registration.py</code>, with mocked BigQuery and Runner.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">09</span>
+          <div><p class="text-ink"><strong class="font-semibold">Next.js UI.</strong></p><p class="text-base text-ink-muted mt-1">Scaffold, form, assistant panel, and Playwright journeys at two widths.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">10</span>
+          <div><p class="text-ink"><strong class="font-semibold">Ship readiness.</strong></p><p class="text-base text-ink-muted mt-1">Containers, CI, the AGENTS.md overview, and the code review report.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Risks -->
+  <section class="w-full bg-surface-card">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Risks · <span class="text-gold">one blocker, six major</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Risks and mitigations</h2>
+      <ul class="mt-8 divide-y divide-line border-y border-line">
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-clay text-clay text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Blocker</span><strong class="font-semibold">The briefed Gemini 2.5 models are being retired.</strong></p>
+            <p class="text-base text-ink-muted mt-1">The Gemini API routes 2.5 requests to successors from 2026-12-01, and Vertex AI listed a 2026-10-20 retirement. Model ids are configuration, the platform check calls each one, and no status depends on a model.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">Registrations serialize on the table lock.</strong></p>
+            <p class="text-base text-ink-muted mt-1">A losing transaction aborts at once. Jittered retries for 10 s, then 503 with Retry-After; a transactional store waits if conflicts pass 1%.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">A MERGE without the lock can insert one email twice.</strong></p>
+            <p class="text-base text-ink-muted mt-1">The lock statement opens every transaction, a test asserts its position, and the duplicate-keys check detects any breach.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">Anyone can probe which emails, phones, and tax IDs are registered.</strong></p>
+            <p class="text-base text-ink-muted mt-1">Accepted for email. Per-client limits, the bot check, and a client hash in the audit table make probing slower and visible.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">Personal data reaches model providers.</strong></p>
+            <p class="text-base text-ink-muted mt-1">Prompts carry no tax ID or full phone, candidates go as opaque refs, and the OpenAI fallback is off by default.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">Next.js 15 security releases end on 2027-01-31.</strong></p>
+            <p class="text-base text-ink-muted mt-1">Pin the latest 15.x and settle the move to 16 before production.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-clay mt-0.5">warning</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Major</span><strong class="font-semibold">Prompt injection through chat or form fields.</strong></p>
+            <p class="text-base text-ink-muted mt-1">The register tool takes no model data, only the API grants confirmation, and outputs are schema-validated.</p>
+          </div>
+        </li>
+        <li class="py-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-lilac mt-0.5">info</span>
+          <div>
+            <p class="text-ink"><span class="inline-block border border-line text-ink-muted text-sm uppercase tracking-wide px-2 py-0.5 mr-2">Minor</span><strong class="font-semibold">Seven smaller risks.</strong></p>
+            <p class="text-base text-ink-muted mt-1">Per-instance sessions and limits, tiny daily partitions, shared phone numbers, register latency, hash-key rotation, unverified ADK details, and a stale disposable list. Each has a mitigation in the plan.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Open questions -->
+  <section class="w-full bg-surface-warm">
+    <div class="max-w-[1200px] mx-auto px-6 py-20">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-ink-label">
+        Open questions · <span class="text-gold">four from shaping, four found in planning</span>
+      </p>
+      <h2 class="font-sans text-2xl md:text-3xl font-semibold text-ink mt-2">Questions to settle</h2>
+      <div class="grid md:grid-cols-2 gap-x-10 gap-y-6 mt-8">
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">01</span>
+          <div><p class="text-ink"><strong class="font-semibold">Disposable list source.</strong></p><p class="text-base text-ink-muted mt-1">The plan vendors a public list and refreshes it by script.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">02</span>
+          <div><p class="text-ink"><strong class="font-semibold">Tax-ID formats.</strong></p><p class="text-base text-ink-muted mt-1">Four proposed types; a keyed hash and the last four characters are stored.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">03</span>
+          <div><p class="text-ink"><strong class="font-semibold">Address collection.</strong></p><p class="text-base text-ink-muted mt-1">Optional in the plan, because duplicate matching uses it.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">04</span>
+          <div><p class="text-ink"><strong class="font-semibold">Abuse providers.</strong></p><p class="text-base text-ink-muted mt-1">Rate limiting and the bot check; a per-instance limiter and a local stub ship first.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-gold pt-4">
+          <span class="font-mono text-3xl font-semibold text-gold tabular-nums">05</span>
+          <div><p class="text-ink"><strong class="font-semibold">Gemini model.</strong></p><p class="text-base text-ink-muted mt-1">Whether the dev project can still call 2.5, and which successor otherwise.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">06</span>
+          <div><p class="text-ink"><strong class="font-semibold">Next.js major.</strong></p><p class="text-base text-ink-muted mt-1">15 as briefed, or 16, which is in active support.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">07</span>
+          <div><p class="text-ink"><strong class="font-semibold">Fallback data.</strong></p><p class="text-base text-ink-muted mt-1">Whether chat messages and form values may go to OpenAI.</p></div>
+        </div>
+        <div class="flex gap-4 border-t border-line pt-4">
+          <span class="font-mono text-3xl font-semibold text-ink-muted/40 tabular-nums">08</span>
+          <div><p class="text-ink"><strong class="font-semibold">Audit retention.</strong></p><p class="text-base text-ink-muted mt-1">Sets the partition expiration on the audit table.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sources -->
+  <section class="w-full bg-[#141f26] text-ink-label-on-dark on-dark">
+    <div class="max-w-[1200px] mx-auto px-6 py-16">
+      <p class="font-mono text-sm uppercase tracking-[0.16em] font-medium text-gold">— Sources · verified 2026-11-16</p>
+      <ul class="mt-4 space-y-2 text-base">
+        <li>→ <a href="https://ai.google.dev/gemini-api/docs/deprecations" class="underline text-ink-on-dark">Gemini API deprecations</a> · <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions" class="underline text-ink-on-dark">Vertex AI model versions</a> <span class="text-ink-label-on-dark">— establish the 2.5 retirement dates and the successor ids.</span></li>
+        <li>→ <a href="https://cloud.google.com/bigquery/docs/transactions" class="underline text-ink-on-dark">BigQuery transactions</a> · <a href="https://cloud.google.com/bigquery/docs/data-manipulation-language" class="underline text-ink-on-dark">BigQuery DML</a> <span class="text-ink-label-on-dark">— establish the table lock, the abort behavior, insert-only MERGE concurrency, and the streaming restriction.</span></li>
+        <li>→ <a href="https://cloud.google.com/bigquery/docs/primary-foreign-keys" class="underline text-ink-on-dark">BigQuery keys</a> · <a href="https://cloud.google.com/bigquery/docs/parameterized-queries" class="underline text-ink-on-dark">Parameterized queries</a> <span class="text-ink-label-on-dark">— establish unenforced keys and the parameter limits.</span></li>
+        <li>→ <a href="https://adk.dev" class="underline text-ink-on-dark">ADK documentation</a> · <a href="https://pypi.org/project/google-adk/" class="underline text-ink-on-dark">google-adk on PyPI</a> <span class="text-ink-label-on-dark">— establish the LlmAgent, tool, Runner, and LiteLLM APIs and version 2.14.1 with its extras.</span></li>
+        <li>→ <a href="https://nextjs.org/support-policy" class="underline text-ink-on-dark">Next.js support policy</a> · <a href="https://ui.shadcn.com/docs/forms/react-hook-form" class="underline text-ink-on-dark">shadcn/ui forms</a> <span class="text-ink-label-on-dark">— establish Next.js 15's maintenance window and the Field form pattern.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <footer class="w-full bg-surface-ink-block on-dark">
+    <div class="max-w-[1200px] mx-auto px-6 py-8 flex flex-wrap items-center justify-between gap-3 border-t border-[#262c38]">
+      <span class="font-mono text-sm text-ink-label-on-dark">© 2026 Egen Solutions, LLC. All Rights Reserved. · Last updated 2026-11-16</span>
+      <span class="font-mono text-sm text-[#ccff00] inline-flex items-center gap-2">
+        built with
+        <img src="https://axis.egen.dev/assets/axis-logo-white.svg" alt="axis" class="h-[1.3em] w-auto -mt-1" />
+      </span>
+    </div>
+  </footer>
+
+  <script>
+    // Trigger a diagram's animation once it scrolls into view, then stop watching it.
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("in-view");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.3 },
+    );
+    document.querySelectorAll("[data-animate]").forEach((el) => io.observe(el));
+  </script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Local stack: the API on the in-memory store with local adapters, and the UI. Gemini needs a
+# GCP project and credentials, so the advisor and assistant are off here.
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8080"
+    environment:
+      CUSTOMER_STORE: memory
+      ALLOW_LOCAL_ADAPTERS: "true"
+      EMAIL_ALLOW_RESERVED_DOMAINS: "true"
+      ADVISOR_ENABLED: "false"
+      ASSISTANT_ENABLED: "false"
+      CORS_ALLOW_ORIGINS: http://localhost:3000
+      PII_HASH_KEY: local-dev-key-not-for-deployment
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz/ready')"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  ui:
+    build: ./ui
+    ports:
+      - "3000:3000"
+    environment:
+      API_BASE_URL: http://localhost:8000
+      ASSISTANT_ENABLED: "false"
+      BOT_CHECK_STUB_TOKEN: local
+    depends_on:
+      api:
+        condition: service_healthy

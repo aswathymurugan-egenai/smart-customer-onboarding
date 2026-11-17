@@ -1,0 +1,29 @@
+# BEGIN: managed by AXIS — do not hand-edit through END
+# Everything under .axis/ is machine-local by default (materialized playbooks,
+# agent run output, policy state); only the committed knowledge below is
+# tracked + shared with the team.
+.axis/*
+!.axis/plans/
+!.axis/discovery/
+!.axis/diagrams/
+!.axis/context/
+!.axis/custom-agents/
+!.axis/artifacts.json
+# local content inside the committed context dir: the regenerable on-demand
+# reference docs, which axis re-materializes on every sync.
+.axis/context/refs/
+# END: managed by AXIS
+
+# Application build and test output
+.venv/
+__pycache__/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+ui/node_modules/
+ui/.next/
+ui/test-results/
+ui/playwright-report/
+files/

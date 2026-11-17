@@ -1,0 +1,84 @@
+%% Register request sequence. Grounded in the customer registration plan; git SHA: none (no commits yet).
+%% Green bands are deterministic and set the status. The amber band is advisory and never changes it.
+sequenceDiagram
+  autonumber
+  actor U as Registrant
+  participant F as Registration form (Next.js)
+  participant API as FastAPI register route
+  participant R as Domain rules
+  participant DNS as Public DNS
+  participant AD as GeminiAdvisor (advisory only)
+  participant V as Vertex AI Gemini
+  participant S as RegistrationService
+  participant BQ as BigQuery customer_ops
+
+  U->>F: Submit the form
+  F->>API: POST /api/v1/customers/register with Idempotency-Key
+
+  rect rgb(213, 232, 212)
+    Note over API,DNS: Deterministic checks. No model call.
+    API->>API: Pydantic body check, per-client rate limit, bot check
+    opt shape error, rate limit, or bot check failure
+      API-->>F: 422 validation-error, 429 rate-limited, or 403 bot-check-failed
+    end
+    API->>R: Normalize email, phone, tax ID, and name
+    API->>R: Email syntax and disposable-domain list
+    opt invalid input or disposable domain
+      API-->>F: 422 email-invalid, email-disposable, phone-invalid, or tax-id-invalid
+    end
+    API->>DNS: MX lookup, then A/AAAA, 2 s budget
+    alt no MX and no A record
+      API-->>F: 422 email-domain-undeliverable
+    else records found, or timeout
+      Note right of DNS: A timeout sets mx_status unknown and registration continues
+    end
+  end
+
+  rect rgb(255, 242, 204)
+    Note over API,V: Advisory only. A failure or timeout drops the warnings and never changes the status.
+    par typo advice
+      API->>AD: suggest_domain with the email domain only
+      AD->>V: Structured Gemini call
+      V-->>AD: is_likely_typo, suggested_domain, confidence
+    and duplicate advice
+      API->>BQ: find_fuzzy_candidates.sql blocking query, read-only
+      API->>AD: assess_candidates with up to 5 candidates as refs c1 to c5
+      AD->>V: Structured Gemini call
+      V-->>AD: verdict, confidence, and reason codes per ref
+    end
+    AD-->>API: possible_typo and possible_duplicate warnings, or advisory_status unavailable
+  end
+
+  rect rgb(213, 232, 212)
+    Note over API,BQ: The BigQuery transaction decides created, replay, mismatch, or duplicate.
+    API->>S: register(command, channel, idempotency_key)
+    loop on LockConflict, up to 3 retries with jitter within 10 s
+      S->>BQ: BEGIN TRANSACTION
+      S->>BQ: DELETE FROM customers WHERE FALSE, which takes the table lock
+      S->>BQ: Idempotency replay check on registration_audit_logs
+      S->>BQ: Parameterized MERGE, insert only when no email, phone, or tax-ID hash matches
+      alt inserted
+        S->>BQ: Audit INSERT, then COMMIT
+      else matched
+        S->>BQ: matched_on query, then ROLLBACK
+      end
+      BQ-->>S: Outcome row, or abort on concurrent update
+    end
+    S-->>API: created, replay, fingerprint_mismatch, duplicate, or RegistrationBusy
+    opt outcome is not created
+      API->>BQ: Standalone audit INSERT
+    end
+    alt created
+      API-->>F: 201 RegistrationCreated with warnings and advisory_status
+    else replay
+      API-->>F: 201 with the original customer_id and Idempotent-Replayed true
+    else fingerprint mismatch
+      API-->>F: 422 idempotency-key-reused
+    else duplicate
+      API-->>F: 409 customer-duplicate with matched_on
+    else lock retries exhausted
+      API-->>F: 503 registration-busy with Retry-After 60
+    end
+  end
+
+  F-->>U: Success card with warnings, or errors under the matching fields

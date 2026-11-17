@@ -1,0 +1,85 @@
+[project]
+name = "smart-customer-onboarding"
+version = "0.1.0"
+description = "Customer registration API with rule-based outcomes and Gemini advice."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-adk[gcp]==2.14.1",
+    "google-genai==2.34.0",
+    "google-cloud-bigquery==3.47.0",
+    "fastapi==0.163.1",
+    "uvicorn[standard]==0.54.0",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.3",
+    "email-validator==2.4.0",
+    "dnspython==2.9.2",
+    "phonenumbers==9.0.43",
+    "rapidfuzz==3.14.6",
+    "structlog==26.1.0",
+    "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+# The GPT-4o fallback for assistant turns. The bounds are the ones google-adk itself
+# declares; litellm 1.82.7 and 1.82.8 shipped unauthorized code and fall outside them.
+fallback = ["litellm>=1.84,<1.106.3"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
+    "pytest-asyncio==1.5.0",
+    "pytest-randomly==5.1.0",
+    "httpx==0.28.1",
+    "hypothesis==6.170.15",
+    "ruff==0.17.5",
+    "mypy==2.4.1",
+    "types-PyYAML==6.0.12.20261113",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["ui"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PT", "RUF", "S", "ASYNC", "PL"]
+ignore = [
+    "PLR0913",  # service constructors and repository builders take explicit dependencies
+    "PLR0917",  # same reason, for positional arguments
+    "PLR2004",  # thresholds live in Settings; comparisons against small literals read fine
+    "S101",     # assert is the pytest idiom; app code does not rely on it
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S608", "PLR0915", "PLR0912", "RUF012"]
+"scripts/**" = ["S310", "PLR0915"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["app"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["google.adk.*", "google.genai.*", "google.cloud.*", "rapidfuzz.*", "phonenumbers.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not integration' -ra"
+markers = [
+    "integration: needs a GCP project and credentials; deselected by default",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:google.*",
+]

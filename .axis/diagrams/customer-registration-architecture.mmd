@@ -1,0 +1,108 @@
+%% Customer registration architecture. Grounded in the customer registration plan; git SHA: none (no commits yet).
+%% Green = deterministic code that decides 201 / 409 / 422. Amber = advisory model path, warnings only.
+flowchart LR
+  user([Registrant])
+
+  subgraph UI["CLOUD RUN: registration-ui<br/>Next.js 15 · React 19 · SA registration-ui, no data roles"]
+    form["Registration form<br/>react-hook-form + zod<br/>validates email on blur, submits with Idempotency-Key"]
+    panel["Assistant panel<br/>chat, suggested actions, Confirm dialog"]
+  end
+
+  subgraph API["CLOUD RUN: registration-api (FastAPI) · SA registration-api"]
+    subgraph ROUTES["FASTAPI ROUTES /api/v1"]
+      r_reg["POST /customers/register<br/>201 · 403 · 409 · 422 · 429 · 503"]
+      r_val["POST /customers/validate<br/>200 verdict · 422 malformed body"]
+      r_dup["POST /customers/check-duplicate<br/>200 exact_matches + warning"]
+      r_chat["POST /agent/chat<br/>200 reply · 503 assistant-unavailable"]
+    end
+
+    subgraph DECIDE["DETERMINISTIC DECISION PATH: alone decides 201 / 409 / 422, no model call"]
+      s1["Rate limit 429 and bot check 403"]
+      s2["Normalize and validate body<br/>email, E.164 phone, tax ID, name → 422"]
+      s3["Email rules: syntax and disposable list<br/>422 email-invalid / email-disposable"]
+      s4["MX/DNS lookup, 2 s<br/>no MX and no A → 422 email-domain-undeliverable<br/>timeout → mx_status unknown, continue"]
+      s5["RegistrationService<br/>BigQuery transaction in a worker thread<br/>LockConflict: 3 retries, jitter, 10 s, then 503 registration-busy"]
+      s6["Outcome map<br/>created 201 · replay 201 + Idempotent-Replayed<br/>duplicate 409 matched_on · key reuse 422<br/>non-created outcomes append an audit row"]
+      s7["check-duplicate exact match<br/>email, phone, tax-ID hash, writes no customer"]
+    end
+
+    subgraph ADVISE["ADVISORY ONLY: model output becomes warnings, never a status code"]
+      a1["Candidate pre-score<br/>blocking query + rapidfuzz, top 5 as refs c1 to c5"]
+      a2["GeminiAdvisor (google-genai)<br/>typo advice from the domain only<br/>duplicate adjudication on refs<br/>4 s budget, ADVISOR_ENABLED switch"]
+
+      subgraph ADK["ADK ASSISTANT: app/agents/registration_agent.py"]
+        llm["LlmAgent registration_assistant<br/>output_schema AssistantTurn"]
+        run["Runner + InMemorySessionService<br/>20 s turn, janitor, 1,000 sessions"]
+        guard["Guardrails in code<br/>API alone sets confirm flag<br/>4 tool calls per turn, 30 turns per session"]
+        t1["validate_email_tool(email)<br/>calls EmailValidationService"]
+        t2["detect_duplicate_customer_tool<br/>(include_likely_duplicates)<br/>calls DuplicateDetectionService"]
+        t3["register_customer_bq_tool()<br/>no fields from the model, needs confirmation<br/>calls RegistrationService"]
+        fb["OPTIONAL fallback agent<br/>LiteLlm openai/gpt-4o, OFF by default"]
+      end
+    end
+  end
+
+  dns["Public DNS resolvers<br/>MX, then A/AAAA"]
+  openai["OpenAI GPT-4o<br/>optional, OFF by default"]
+
+  subgraph GCP["GOOGLE CLOUD PROJECT (one per environment)"]
+    subgraph BQ["BIGQUERY: dataset customer_ops"]
+      txn[["register_customer.sql, one transaction<br/>1 BEGIN TRANSACTION<br/>2 DELETE FROM customers WHERE FALSE (table lock)<br/>3 idempotency replay check on audit logs<br/>4 parameterized MERGE, insert only when no email, phone, or tax-ID hash matches<br/>5 inserted: audit INSERT and COMMIT, matched: ROLLBACK"]]
+      cust[("customer_ops.customers<br/>partition DATE created_at<br/>cluster email, normalized_name<br/>no raw tax ID")]
+      audit[("customer_ops.registration_audit_logs<br/>append-only, HMAC hashes<br/>no raw email, phone, tax ID, IP")]
+    end
+    vtx["Vertex AI: Gemini<br/>vertexai=True, default gemini-2.5-flash, 2.5-pro selectable<br/>? 2.5 models listed as retired on Vertex AI, availability unverified"]
+    iam["SA registration-api IAM roles<br/>bigquery.dataEditor on customer_ops only<br/>bigquery.jobUser on the project<br/>aiplatform.user on the project<br/>secretmanager.secretAccessor on its own secrets<br/>default compute account never attached"]
+    sm["Secret Manager, mounted as volumes<br/>pii-hash-key, bot-check secret, OpenAI key only when fallback is on"]
+  end
+
+  user -->|HTTPS| UI
+  form -->|"POST register + Idempotency-Key"| r_reg
+  form -->|"POST validate on email blur"| r_val
+  panel -->|"POST agent/chat: snapshot, last result, action"| r_chat
+
+  r_reg --> s1
+  r_val --> s3
+  r_dup --> s7
+  r_chat -.-> llm
+
+  s1 --> s2 --> s3 --> s4 --> s5 --> s6
+  s4 -->|"MX, then A/AAAA"| dns
+  s5 -->|"parameterized DML query job"| txn
+  s7 -->|"read-only exact-match query"| BQ
+  txn -->|"MERGE insert"| cust
+  txn -->|"created audit row, same transaction"| audit
+
+  s7 -.->|"fuzzy half of check-duplicate"| a1
+  a1 -.->|"candidate refs"| a2
+  DECIDE -.->|"advice request, 4 s budget"| a2
+  a2 -.->|"warnings only, status unchanged"| DECIDE
+  a2 -.->|"structured JSON calls"| vtx
+  ADK -.->|"assistant chat turns"| vtx
+  run --> llm
+  llm --> t1
+  llm --> t2
+  llm --> t3
+  fb -.->|"only with LLM_FALLBACK_MODEL and a key"| openai
+
+  API -.->|"runs as"| iam
+  API -.->|"mounted secrets"| sm
+
+  classDef ui fill:#dae8fc,stroke:#6c8ebf,color:#1a1a1a
+  classDef decide fill:#d5e8d4,stroke:#82b366,color:#1a1a1a
+  classDef advise fill:#fff2cc,stroke:#d6b656,color:#1a1a1a,stroke-dasharray: 5 5
+  classDef data fill:#e1d5e7,stroke:#9673a6,color:#1a1a1a
+  classDef ext fill:#f5f5f5,stroke:#666666,color:#1a1a1a
+  classDef optional fill:#f5f5f5,stroke:#999999,color:#1a1a1a,stroke-dasharray: 3 3
+
+  class form,panel,r_reg,r_val,r_dup,r_chat ui
+  class s1,s2,s3,s4,s5,s6,s7,a1,guard decide
+  class a2,llm,run,t1,t2,t3,vtx advise
+  class txn,cust,audit data
+  class dns,iam,sm ext
+  class fb,openai optional
+
+  style DECIDE fill:#f6fbf4,stroke:#82b366,stroke-dasharray: 6 4
+  style ADVISE fill:#fffbea,stroke:#d6b656,stroke-dasharray: 6 4
+  style ADK fill:#fffdf3,stroke:#d6b656,stroke-dasharray: 4 4
+  style BQ fill:#f8f4fb,stroke:#9673a6,stroke-dasharray: 4 4

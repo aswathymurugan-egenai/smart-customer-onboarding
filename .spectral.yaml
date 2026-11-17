@@ -1,0 +1,14 @@
+extends: ["spectral:oas"]
+rules:
+  # The base URL differs per environment, and clients take it from configuration.
+  oas3-api-servers: off
+  operation-operationId: error
+  operation-description: error
+  operation-tags: error
+  problem-json-on-errors:
+    description: Every 4xx and 5xx response carries an application/problem+json body.
+    severity: error
+    given: "$.paths[*][*].responses[?(@property.match(/^[45]/))]"
+    then:
+      field: "content.application/problem+json"
+      function: truthy
